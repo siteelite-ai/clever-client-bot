@@ -76,3 +76,29 @@ export function acceptedApplicationCardIssue(
   }
   return null;
 }
+
+/** Turn-local memo of a pure proof, never a cache of catalog truth by SKU.
+ * Recovery/search/render may inspect the same card repeatedly. Reuse a
+ * verdict only for the same frozen obligations AND byte-identical evidence.
+ * Replacing or mutating any enumerable card field invalidates the receipt.
+ * The bounded memo does not skip a new card or relax any proof condition. */
+export function createAcceptedApplicationCardVerifier(
+  obligations:readonly AcceptedApplicationObligation[],
+){
+  const frozen=structuredClone(obligations);
+  const memo=new Map<string,{fingerprint:string;issue:ReturnType<typeof acceptedApplicationCardIssue>}>();
+  let hits=0,evaluations=0;
+  return {
+    check(product:ProductRef|undefined):ReturnType<typeof acceptedApplicationCardIssue>{
+      if(!frozen.length)return null;
+      if(!product)return 'application_unknown';
+      const fingerprint=JSON.stringify(product),prior=memo.get(product.id);
+      if(prior?.fingerprint===fingerprint){hits++;return prior.issue;}
+      const issue=acceptedApplicationCardIssue(product,frozen);evaluations++;
+      memo.set(product.id,{fingerprint,issue});
+      if(memo.size>256)memo.delete(memo.keys().next().value!);
+      return issue;
+    },
+    stats:()=>({hits,evaluations,entries:memo.size}),
+  };
+}

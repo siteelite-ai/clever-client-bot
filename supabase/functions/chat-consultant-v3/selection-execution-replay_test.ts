@@ -124,6 +124,8 @@ for(const room of ['моечная','кулинарная мастерская']
         assert(/не\s+удалось\s+подтвердить|неподтвержд|не\s+подтверди/iu.test(turn.text),JSON.stringify({text:turn.text,steps}));
         assert(steps.some(s=>s.step==='v3_customer_application_unverified_notice'&&s.meta.scope==='inspected_cards_not_catalog_absence'),JSON.stringify(steps));
         assert(!steps.some(s=>s.step==='v3_jargon_recovery_technical_notice'),'A valid lexical helper response is not an outage');
+        const memo=steps.filter(s=>s.step==='v3_customer_application_card_proof').at(-1)?.meta.proof_memo;
+        assert(memo?.hits>0&&memo.evaluations===memo.entries,'Repeated candidate inspection must reuse the same unchanged proof, not relax it');
         return;
       }
       assert(!steps.some(s=>s.step==='v3_customer_application_unverified_notice'),'A later proved card must resolve the unverified-candidate state');

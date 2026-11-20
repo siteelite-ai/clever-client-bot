@@ -1,5 +1,5 @@
 import {assert,assertEquals,assertThrows} from 'https://deno.land/std@0.224.0/assert/mod.ts';
-import {compileAcceptedApplicationProof,acceptedApplicationCardIssue} from './accepted-application-proof.ts';
+import {compileAcceptedApplicationProof,acceptedApplicationCardIssue,createAcceptedApplicationCardVerifier} from './accepted-application-proof.ts';
 import type {ProductRef} from './types.ts';
 const facets=[{key:'ip',caption:'IP',values:[{value:'IP20'},{value:'IP44'},{value:'IP65'}]}];
 const args=(quote:string,parameter='Помещение')=>({selection_readiness:{decision:'ready',critical_inputs:[{parameter,customer_quote:quote,question:'',impact:''}]}});
@@ -42,4 +42,44 @@ Deno.test('a replaced application uses the owned positive phrase; no stale wet a
   const component=compileAcceptedApplicationProof(args('моечная'),'моечная',[]);
   assertEquals(component[0].protection,null);
   assertEquals(acceptedApplicationCardIssue(card('Комплектующее для влажных помещений'),component),null);
+});
+
+Deno.test('application proof memo reuses only identical card evidence under frozen turn obligations',()=>{
+  const obligations=compileAcceptedApplicationProof(args('моечная'),'моечная',facets);
+  const verifier=createAcceptedApplicationCardVerifier(obligations);
+  const p=card('Прибор для влажных помещений','IP65');
+  assertEquals(verifier.check(p),null);assertEquals(verifier.check(p),null);
+  assertEquals(verifier.stats(),{hits:1,evaluations:1,entries:1});
+  // Same identity AND same object are not a receipt when evidence changes.
+  p.short_traits[0]='IP: IP20';
+  assertEquals(verifier.check(p),'environmental_protection_unknown');
+  p.short_traits[0]='IP: IP65';p.description_excerpt='Не предназначен для влажных помещений.';
+  assertEquals(verifier.check(p),'application_contradicted');
+  assertEquals(verifier.stats().evaluations,3);
+  // Mutating a caller-owned criteria array must not erase the frozen rule.
+  obligations.length=0;
+  assertEquals(verifier.check(card('Обычный прибор','IP65')),'application_unknown');
+  assertEquals(createAcceptedApplicationCardVerifier([]).check(p),null);
+});
+
+Deno.test('application proof memo invalidates direct facet mutations and cannot retain another turn or unbounded IDs',()=>{
+  const obligations=compileAcceptedApplicationProof(args('моечная'),'моечная',facets);
+  const verifier=createAcceptedApplicationCardVerifier(obligations);
+  const p={...card('Прибор для влажных помещений','IP65'),facet_values:{ip:['IP65']},facet_captions:{ip:'IP'}};
+  assertEquals(verifier.check(p),null);assertEquals(verifier.check({...p}),null);
+  p.facet_values.ip[0]='IP20';
+  // Compact facet changes invalidate even when this particular existing
+  // checker reads the human trait. Do not change its evidence semantics to
+  // satisfy a memo test; the final mandatory-facet gate is independent.
+  assertEquals(verifier.check(p),acceptedApplicationCardIssue(p,obligations));
+  assertEquals(verifier.stats().evaluations,2);
+  p.short_traits[0]='IP: IP20';
+  assertEquals(verifier.check(p),'environmental_protection_unknown');
+  const next=createAcceptedApplicationCardVerifier(obligations);
+  assertEquals(next.stats(),{hits:0,evaluations:0,entries:0});
+  assertEquals(next.check(p),'environmental_protection_unknown');
+  for(let i=0;i<300;i++)verifier.check({...p,id:String(i)});
+  assertEquals(verifier.stats().entries,256);
+  const restored={...p,short_traits:['IP: IP65'],facet_values:{ip:['IP65']}};
+  assertEquals(verifier.check(restored),null);
 });
