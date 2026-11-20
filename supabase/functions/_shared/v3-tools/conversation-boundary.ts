@@ -1,6 +1,7 @@
 import { isAdditionalProductSelectionFollowup } from "./recent-product-evidence.ts";
 import { isIndependentExactProductInquiry } from "./independent-product-inquiry.ts";
-import { hasExplicitNewTaskPreface } from "./request-preface.ts";
+import { hasExplicitNewTaskPreface, independentSelectionRequestBody } from "./request-preface.ts";
+import { uniqueSpecificationAssistanceProfile } from "./selection-readiness.ts";
 import { compoundAttributeSelectionBoundary, isCompoundAttributeSelectionFollowup, isShortAttributeSelectionFollowup } from "./active-selection-scope.ts";
 
 export type ConversationMessage = {
@@ -38,10 +39,6 @@ const COMPLETE_REQUEST_RE =
   /(?:^|\s)(?:найди|подбери|подберите|покажи|предложи|предложите|посоветуй|посоветуйте|хочу|мне\s+нужен|мне\s+нужна|мне\s+нужно|нам\s+нужен|нам\s+нужна|есть\s+ли|у\s+(?:вас|тебя)\s+есть|можно\s+ли|сколько|чем\s+отличается)(?:\s|[?!.,]|$)/iu;
 const ELLIPTICAL_ATTRIBUTE_RE =
   /^(?:а\s+)?(?:(?:есть|покажи(?:те)?)\s+(?:ещ[её]\s+)?(?:более\s+)?[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+варианты?)?|[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+[\p{L}-]{3,}){0,2}\s+есть)[?!.,]?$/iu;
-const INDEPENDENT_SELECTION_FRAME_RE =
-  /^(?:(?:новая\s+тема|новый\s+вопрос)\s*[:.!?-]?\s*)?(?:(?:а|ну|тогда|пожалуйста)\s+)*(?:найди(?:те)?|подбери(?:те)?|покажи(?:те)?|предложи(?:те)?|посоветуй(?:те)?|ищу|хочу(?:\s+купить)?|(?:мне|нам)\s+нуж(?:ен|на|но|ны))\s+(.+)$/iu;
-const INDEPENDENT_SELECTION_QUESTION_RE =
-  /^(?:(?:а|ну|тогда)\s+)*како\p{L}*\s+(.+\s+(?:подойд\p{L}*|нуж\p{L}*|выбр\p{L}*|купить|посовет\p{L}*)[^.!?]*\?)$/iu;
 const SCOPED_DEPENDENCY_RE =
   /(?:^|[^\p{L}])(?:эт\p{L}*|тот|того|той|тех|данн\p{L}*|предыдущ\p{L}*|прежн\p{L}*|выше|ниже|их|его|её|него|неё|них|друг\p{L}*|ещ[её]|вместо|аналог\p{L}*|вариант\p{L}*\s+из\s+списка)(?=$|[^\p{L}])/iu;
 const PRICE_CRITERION_RE =
@@ -52,8 +49,6 @@ const MODEL_MARKER_RE =
   /(?<![\p{L}\p{N}])(?:\p{Lu}{2,}[\p{L}\p{N}-]*|[\p{L}]{1,10}[-/]?\d{1,5}[\p{L}\p{N}-]*)(?![\p{L}\p{N}])/gu;
 const RELATION_TARGET_RE =
   /(?:^|\s)(для|под|к|ко|на)\s+([\p{L}]{3,})(?=$|[^\p{L}])/giu;
-const DEPENDENT_FRAME_BODY_RE =
-  /^(?:для|под|на|к|ко|в|во|по|с|со|от|из|до|без|при|вместо)(?=\s|$)/iu;
 const ANCHOR_STOPWORDS = new Set([
   "мне",
   "нам",
@@ -197,20 +192,29 @@ export function classifyPendingSelectionReadinessNewTaskLocally(
       reason: "local_verified_readiness_explicit_new_topic",
     };
   }
-  const frame = current.match(INDEPENDENT_SELECTION_FRAME_RE) ??
-    current.match(INDEPENDENT_SELECTION_QUESTION_RE);
+  const body = independentSelectionRequestBody(current);
   if (
-    !frame || SCOPED_DEPENDENCY_RE.test(current) ||
+    !body || SCOPED_DEPENDENCY_RE.test(current) ||
     isAdditionalProductSelectionFollowup(current) ||
     /(?:[.!?;]\s+\p{L}|,\s+а\s+\p{L})/iu.test(current) ||
     /(?:^|\s)уточнение\s+клиента\s*:/iu.test(current)
   ) return null;
 
-  const body = frame[1];
   // An imperative followed only by a prepositional refinement still needs
   // the issued product class: `Подбери для стационарной прокладки ...` is not
   // a self-contained request, even if its purpose differs lexically.
-  if (DEPENDENT_FRAME_BODY_RE.test(body)) return null;
+  // The same product noun can belong to different verified applications.
+  // A full independent request with one newly registered application must
+  // not inherit another application's route/current/length. Bare refinements,
+  // references and mixed-application requests remain subject to the gates above.
+  const assistance = scopeRecord.assistance as {version?: unknown} | undefined;
+  if (pendingRecord.facet_key === "engineering_specification" && assistance?.version === 1) {
+    const previousApplication = uniqueSpecificationAssistanceProfile(original);
+    const requestedApplication = uniqueSpecificationAssistanceProfile(current);
+    if (previousApplication && requestedApplication && previousApplication !== requestedApplication) {
+      return {mode: "new_task", confidence: 1, reason: "local_verified_readiness_application_changed"};
+    }
+  }
   const currentAnchors = [...new Set(scopedAnchorWords(body))];
   const originalAnchors = [...new Set(scopedAnchorWords(original))];
   if (currentAnchors.length === 0 || originalAnchors.length === 0) return null;
@@ -294,12 +298,15 @@ export function isReadinessQuestionSupersededByVerifiedSection(
   // sees, including comma-separated introductions such as «Ну, нужны …».
   const frameText = current.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
     .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/gu, " ").trim();
-  const frame = frameText.match(INDEPENDENT_SELECTION_FRAME_RE) ??
-    frameText.match(
-      /^(?:(?:а|тогда|пожалуйста|ну)\s+)*нуж(?:ен|на|но|ны)\s+(.+)$/iu,
-    );
+  const bareFrame = frameText.match(
+    /^(?:(?:а|тогда|пожалуйста|ну)\s+)*нуж(?:ен|на|но|ны)\s+(.+)$/iu,
+  );
+  // This separately verified section also accepts the legacy bare «нужны»
+  // frame. Normalize only for the grammatical test, never for a catalog query.
+  const frameBody = independentSelectionRequestBody(frameText) ??
+    (bareFrame ? independentSelectionRequestBody(`Мне нужны ${bareFrame[1]}`) : null);
   if (
-    !frame || DEPENDENT_FRAME_BODY_RE.test(frame[1]) ||
+    !frameBody ||
     SCOPED_DEPENDENCY_RE.test(current) ||
     isAdditionalProductSelectionFollowup(current) ||
     /(?:[.!?;]\s+\p{L}|,\s+а\s+\p{L})/iu.test(current)
