@@ -57,6 +57,10 @@ export function resolveCustomerOperatingPointDomains(
   domains: OperatingPointDomain[];
   unresolved: number;
   unresolvedUnits: string[];
+  /** A literal customer point with a unique live working-voltage facet,
+   * but no enumerated scalar/closed interval covering it. Not a missing
+   * customer value, an ambiguous point or a finding about all products. */
+  uncoveredCatalogPoints: Array<{ point: number; unit: string }>;
 } {
   const points = new Map<string, number>();
   const ambiguous = new Set<string>();
@@ -114,6 +118,7 @@ export function resolveCustomerOperatingPointDomains(
     }
   }
   const result: OperatingPointDomain[] = [];
+  const uncoveredCatalogPoints: Array<{ point: number; unit: string }> = [];
   let unresolved = unresolvedPhaseReplies;
   for (const [unit, point] of points) {
     if (ambiguous.has(unit)) {
@@ -154,6 +159,9 @@ export function resolveCustomerOperatingPointDomains(
     if (!acceptedValues.length || acceptedValues.length > 12) {
       unresolved++;
       unresolvedUnits.add(unit);
+      if (!acceptedValues.length && facet.values.length > 0) {
+        uncoveredCatalogPoints.push({ point, unit });
+      }
       continue;
     }
     result.push({
@@ -172,7 +180,29 @@ export function resolveCustomerOperatingPointDomains(
       },
     });
   }
-  return { domains: result, unresolved, unresolvedUnits: [...unresolvedUnits] };
+  return {
+    domains: result,
+    unresolved,
+    unresolvedUnits: [...unresolvedUnits],
+    uncoveredCatalogPoints,
+  };
+}
+
+/** Stop only when the gap unambiguously belongs to the current catalog
+ * schema. Existing repairs still handle ambiguous customers/facets, more
+ * than one unresolved condition and declarations the model can correct. */
+export function singleUncoveredCatalogOperatingPoint(
+  customerText: string,
+  facets: readonly CriteriaFacet[],
+): { point: number; unit: string } | null {
+  const compilation = resolveCustomerOperatingPointDomains(
+    customerText,
+    facets,
+  );
+  return compilation.unresolved === 1 &&
+      compilation.uncoveredCatalogPoints.length === 1
+    ? compilation.uncoveredCatalogPoints[0]
+    : null;
 }
 
 /** Equality-style working-point prose must identify the same operating role,
