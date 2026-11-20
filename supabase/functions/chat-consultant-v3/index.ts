@@ -17,6 +17,7 @@ import {
 import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
 import { createSelectionExecutionTrace, type SelectionExecutionTrace } from "../_shared/v3-tools/selection-execution-trace.ts";
 import { compileReadyCandidateRetrieval } from "../_shared/v3-tools/selection-retrieval-plan.ts";
+import { compileApplicationCandidatePageRecovery } from "../_shared/v3-tools/application-candidate-page-recovery.ts";
 import { compileAcceptedApplicationProof, createAcceptedApplicationCardVerifier } from "../_shared/v3-tools/accepted-application-proof.ts";
 import { independentGuardCoversMeasurements } from "../_shared/v3-tools/independent-measurement-coverage.ts";
 import {
@@ -861,6 +862,7 @@ import type {
   ProductFull,
   ProductRef,
   SearchCatalogOk,
+  ToolError,
   ToolName,
   ToolResult,
   ToolSideEffect,
@@ -1355,6 +1357,12 @@ interface ToolContext {
   verifyMeasuredPointRangeRenderIds?: (ids: string[]) => boolean;
   verifyCustomerConnection?: (id: string) => boolean;
   filterSelectionCandidates?: <T extends { results: ProductRef[] }>(result: T) => T;
+  recoverApplicationCandidatePage?: (
+    input: SearchCatalogInput,
+    raw: SearchCatalogOk & { tool: "search_catalog" },
+    filtered: SearchCatalogOk & { tool: "search_catalog" },
+  ) => Promise<(SearchCatalogOk | ToolError) & { tool: "search_catalog" }>;
+  lexicalRecoveryIsApplicationGap?: () => boolean;
   /** Freshly looked-up current source, not a previous rendered batch or fit certificate. */
   currentInquiryEvidence?: RecentProductEvidence[];
   /** Per-turn provenance boundary shared by every catalog and jargon route. */
@@ -1419,9 +1427,13 @@ async function runTool(
     );
     ctx.executionTrace?.("catalog_returned", { rows: result.ok ? result.results.length : 0, cache: ctx.cache.size });
     if (result.ok && ctx.filterSelectionCandidates) {
+      const raw = result;
       ctx.executionTrace?.("candidate_filter_start", { rows: result.results.length });
       result = ctx.filterSelectionCandidates(result);
       ctx.executionTrace?.("candidate_filter_done", { rows: result.results.length });
+      if (ctx.recoverApplicationCandidatePage) result = await ctx.recoverApplicationCandidatePage(
+        args as unknown as SearchCatalogInput, raw, result,
+      );
     }
     ctx.observeCatalogToolResult?.(result);
     return result;
@@ -1435,6 +1447,10 @@ async function runTool(
     return result;
   }
   if (name === "jargon_recover_catalog") {
+    if (ctx.lexicalRecoveryIsApplicationGap?.()) return {
+      tool: "jargon_recover_catalog", ok: false, error_code: "no_products",
+      message: "Тип товара подтверждён. В просмотренном окне не подтверждены условия применения. Это не ошибка названия и не доказательство отсутствия товаров; не подменяй условия синонимами.",
+    };
     let result = await executeJargonRecoverCatalog(
       args as unknown as JargonRecoverCatalogInput,
       {
@@ -10333,9 +10349,11 @@ async function runExpertLoop(
     let result = await executeSearchCatalog(...args);
     ctx.executionTrace?.("catalog_returned", { rows: result.ok ? result.results.length : 0, cache: ctx.cache.size });
     if (result.ok && ctx.filterSelectionCandidates) {
+      const raw = result;
       ctx.executionTrace?.("candidate_filter_start", { rows: result.results.length });
       result = ctx.filterSelectionCandidates(result);
       ctx.executionTrace?.("candidate_filter_done", { rows: result.results.length });
+      if (ctx.recoverApplicationCandidatePage) result = await ctx.recoverApplicationCandidatePage(args[0], raw, result);
     }
     ctx.observeCatalogToolResult?.({ ...result, tool: "search_catalog" });
     return result;
@@ -11749,6 +11767,7 @@ async function runExpertLoop(
   let catalogSearchAttempted = false;
   let catalogLookupCompleted = false;
   let applicationProofNoticeSent = false;
+  let applicationCandidateWindowSettled = false;
   const hasOnlyUnprovedApplicationCandidates = () =>
     acceptedApplicationObligations.length > 0 &&
     applicationProofRejectedIds.size > 0 && applicationProofPassedIds.size === 0 &&
@@ -12081,6 +12100,93 @@ async function runExpertLoop(
   // transient controller state and may be cleared after a grounded lookup;
   // the customer's qualifier itself must survive until cards are rendered.
   let requiredCatalogAlias: string | null = null;
+  ctx.lexicalRecoveryIsApplicationGap = () =>
+    applicationCandidateWindowSettled && productsRendered === 0 &&
+    !requiredCatalogAlias && !declaredAliasQuery && !semanticCompoundEvidenceRequired && !namedSeriesToken;
+  ctx.recoverApplicationCandidatePage = async (input, raw, filtered) => {
+    const verifyCandidates = ctx.filterSelectionCandidates;
+    if (!SELECTION_READINESS_REQUIRED || !customerInputsAccepted || intentMode !== "select" ||
+      !verifyCandidates || !acceptedApplicationObligations.length || filtered.results.length ||
+      applicationCandidateWindowSettled || !lastDiscover || !activeSelectionTarget) return filtered;
+    const rejectedProducts = raw.results.filter(product => applicationProofRejectedIds.has(product.id));
+    const subjectProved = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, rejectedProducts).passed_ids.length > 0;
+    const lexicalRequirement = Boolean(requiredCatalogAlias || declaredAliasQuery ||
+      semanticCompoundEvidenceRequired || namedSeriesToken || replacementIntent || seriesTurnRequiresGrounding);
+    const pages = compileApplicationCandidatePageRecovery({
+      search: input, ready: SELECTION_READINESS_REQUIRED && customerInputsAccepted && intentMode === "select",
+      applicationGap: rejectedProducts.length > 0 && applicationProofPassedIds.size === 0,
+      subjectProved,
+      lexicalRequirement,
+      verifiedLeaf: lastDiscover.leaf_categories.length === 1
+        ? lastDiscover.leaf_categories[0].pagetitle
+        : lastDiscover.leaf_categories.length === 0 ? lastDiscover.category.pagetitle : "",
+      rawTotal: raw.total, rawCoverage: raw.candidate_coverage,
+    });
+    ctx.executionTrace?.("application_recovery_admission", {
+      status: pages ? 1 : 0, subject_proved: subjectProved ? 1 : 0,
+      lexical_required: lexicalRequirement ? 1 : 0, alternatives: pages?.length ?? 0,
+    });
+    if (!pages) return filtered;
+    // Once the class is established, an outage or unproved later card cannot
+    // turn this same request into an unknown-name translation problem.
+    applicationCandidateWindowSettled = true;
+    const seen = new Set(raw.results.map(product => product.id));
+    const applicationCandidates = new Map<string, ProductRef>();
+    let output = filtered;
+    for (const page of pages) {
+      let identity: CatalogSinglePageEvidence | undefined;
+      const next = await executeSearchCatalog(page, {
+        baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken, signal: ctx.turnSignal,
+        executionTrace: ctx.executionTrace,
+        exactFilteredPage: true,
+        onSinglePageEvidence: evidence => { identity = evidence; },
+      }, ctx.cache);
+      if (!next.ok) {
+        if (!applicationCandidates.size) return next;
+        // Retrieval coverage failed AFTER independently checked candidates
+        // were found. Keep that pool for the ordinary final-card conjunction,
+        // rather than turning a partial browse into a false total failure.
+        steps.push({ step: "v3_application_candidate_window_partial", ms: now(), meta: {
+          page: page.page, error_code: next.error_code, candidates: applicationCandidates.size,
+          coverage: "unknown", final_card_checks_required: true,
+        } });
+        return { ...output, candidate_coverage: "unknown", warnings: [
+          ...(output.warnings ?? []), "application_candidate_window_incomplete",
+        ] };
+      }
+      const newIds = new Set(next.results.map(product => product.id).filter(id => !seen.has(id)));
+      const stablePage = !!identity && !identity.issue && identity.requested_page === page.page &&
+        next.total === raw.total && new Set(next.results.map(product => product.id)).size === next.results.length &&
+        newIds.size === next.results.length;
+      for (const product of next.results) seen.add(product.id);
+      // Reapply the SAME conjunction to every fresh card, never a bypass for
+      // missing application, IP, class, range or connection proof.
+      const candidates = stablePage ? next : { ...next, candidate_coverage: "unknown" as const };
+      const checked = verifyCandidates(candidates);
+      for (const product of checked.results) applicationCandidates.set(product.id, product);
+      output = { ...checked, results: [...applicationCandidates.values()] };
+      steps.push({ step: "v3_application_candidate_page_recovery", ms: now(), meta: {
+        source: "known_class_application_proof_gap", page: page.page,
+        examined: next.results.length, verified: checked.results.length,
+        pooled_candidates: output.results.length, final_card_checks_required: true,
+        original_filters_preserved: true, inspected_unique: seen.size,
+        page_identity_verified: stablePage,
+        coverage: "bounded_query_window_not_catalog_absence",
+      } });
+      // Page counters/overlap establish traversal coverage, not a card's own
+      // suitability. Keep independently proved fresh cards, but do not keep
+      // paging an unreliable cursor or turn it into a catalog-absence claim.
+      // An application-eligible card may still fail price/class/compatibility
+      // at final verification. Inspect the bounded window rather than let
+      // that first partial match hide a later fully suitable alternative.
+      if (!stablePage) break;
+    }
+    steps.push({ step: "v3_application_recovery_state", ms: now(), meta: {
+      known_subject: true, lexical_recovery_applicable: false, inspected_unique: seen.size,
+      verified: output.results.length, further_candidates_may_exist: raw.total > seen.size,
+    } });
+    return output;
+  };
   // Turn-level guard: рендерим карточку контактов максимум один раз,
   // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
   const contactsEmitted = { value: false };
@@ -25132,7 +25238,8 @@ async function runExpertLoop(
       | { kind: "unavailable"; errorCode: string }
       | null
     > => {
-      if (!terminalDiscover || !terminalSelectionTarget || !source.trim()) {
+      if (!terminalDiscover || !terminalSelectionTarget || !source.trim() ||
+        ctx.lexicalRecoveryIsApplicationGap?.()) {
         return null;
       }
       const terminalCriteria = scopeCardCriteria(resolveRenderCriteria(
@@ -27838,6 +27945,8 @@ async function runExpertLoop(
     ctx.catalogAppearanceGuard = undefined;
     ctx.verifyCustomerConnection = undefined;
     ctx.filterSelectionCandidates = undefined;
+    ctx.recoverApplicationCandidatePage = undefined;
+    ctx.lexicalRecoveryIsApplicationGap = undefined;
     ctx.verifyMeasuredPointRangeRenderIds = undefined;
     clearTimeout(turnTimer);
   }

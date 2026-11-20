@@ -18,6 +18,8 @@ Deno.test("execution checkpoints contain only fixed phases, UUID, bounded timing
   assertEquals(records.length, 1);
   assertEquals(JSON.parse(records[0]), { event: "v3_selection_checkpoint", log_id: logId,
     sequence: 1, phase: "catalog_json", elapsed_ms: 0, counts: { rows: 50, status: 200 } });
+  trace!("application_recovery_admission", { subject_proved: 1, lexical_required: 0, alternatives: 3 });
+  assertEquals(JSON.parse(records[1]).counts, { alternatives: 3, subject_proved: 1, lexical_required: 0 });
 });
 Deno.test("execution trace is bounded per request and does not share counters across turns", () => {
   const records: string[] = [];

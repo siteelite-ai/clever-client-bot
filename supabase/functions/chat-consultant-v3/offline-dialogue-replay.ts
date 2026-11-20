@@ -12,6 +12,8 @@ export interface ReplayFixture {
   category: string;
   facets: ReplayObject[];
   products: ReplayObject[];
+  /** Optional offline-only pagination/outage shape. No live transport. */
+  catalogProducts?: (url: URL) => Response | Promise<Response>;
   model: (body: ReplayObject, turn: number, call: number) => Response | Promise<Response>;
 }
 
@@ -63,7 +65,9 @@ export async function replayOfflineDialogue(
       if(url.origin==='https://fixture.catalog.invalid'){
         if(url.pathname==='/api/categories')return replayJson({data:{results:[{id:1,pagetitle:fixture.category,children:[]}],pagination:{page:1,pages:1,per_page:200,total:1}}});
         if(url.pathname==='/api/categories/options')return replayJson({data:{category:{id:1,pagetitle:fixture.category,total_products:fixture.products.length},options:fixture.facets}});
-        if(url.pathname==='/api/products')return replayJson({data:{results:fixture.products,pagination:{page:1,pages:1,total:fixture.products.length}}});
+        if(url.pathname==='/api/products')return fixture.catalogProducts
+          ? await fixture.catalogProducts(url)
+          : replayJson({data:{results:fixture.products,pagination:{page:1,pages:1,total:fixture.products.length}}});
       }
       if(url.toString()==='https://openrouter.ai/api/v1/chat/completions')return await fixture.model(await request.json(),turn,++calls);
       unmatched.push(`${request.method} ${url}`);
