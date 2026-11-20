@@ -13963,9 +13963,11 @@ async function runExpertLoop(
             typedMeasurementArguments.add(args);
             return { ...call, args };
           };
+          let repairableRequiredReferenceFailure = false;
           const cleanDeclarationCall = (
             call: ORToolCall | undefined,
           ): ORToolCall | undefined => {
+            repairableRequiredReferenceFailure = false;
             if (!call) return undefined;
             if (requireSelectionReadiness) {
               const normalized = normalizeRequiredFacetWireReferences(
@@ -13995,6 +13997,12 @@ async function runExpertLoop(
             }
             const stringFailure = reasoningStrings?.validate(call.args);
             if (stringFailure) {
+              // Only this bounded technical-reference representation has a
+              // safe one-shot repair. Array overflows, unknown exclusion IDs,
+              // malformed readiness and other wire violations retain their
+              // original immediate fail-closed/no-extra-call behavior.
+              repairableRequiredReferenceFailure =
+                stringFailure.path === "required_facet_values.*" && stringFailure.reason === "enum";
               steps.push({
                 step: "v3_derived_reasoning_string_constraint_rejected",
                 ms: now(),
@@ -14024,18 +14032,32 @@ async function runExpertLoop(
               args: { ...call.args, reasoning: cleaned.text },
             };
           };
-          let declarationCall = cleanDeclarationCall(
-            structuredReasoning.toolCalls.find((toolCall) =>
-              toolCall.name === "declare_selection_reasoning"
-            ),
+          const initialDeclarationCall = structuredReasoning.toolCalls.find((toolCall) =>
+            toolCall.name === "declare_selection_reasoning"
           );
+          let declarationCall = cleanDeclarationCall(initialDeclarationCall);
+          let acceptedDeclarationState: Record<string, unknown> | null = null;
           if (requireSelectionReadiness) {
-            const outcome = await checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning", requireSelectionSubject);
+            // A bad product-side enum/field does not invalidate an independently
+            // owned customer quote. Validate source/readiness with its original
+            // guard, but keep the entire product declaration unusable until a
+            // bounded repair passes ALL its existing guards.
+            const raw = initialDeclarationCall?.args ?? {};
+            const readinessArgs = declarationCall?.args ??
+              (repairableRequiredReferenceFailure
+                ? (requiredReadinessInput ? requiredReadinessInput.decode(raw) : raw)
+                : null) ?? {};
+            const outcome = await checkMandatorySelectionReadiness(readinessArgs, "derived_reasoning", requireSelectionSubject);
             if (outcome) {
               const reason = String(steps.at(-1)?.meta?.reason ?? "selection_readiness_contract_invalid");
               recordClosureRetryOutcome(reason === "selection_input_required", reason);
               return outcome;
             }
+            acceptedDeclarationState = readinessArgs;
+            if (!declarationCall) steps.push({ step: "v3_selection_input_state_retained", ms: now(), meta: {
+              reason: "product_declaration_invalid", customer_inputs_preserved: true,
+              product_declaration_usable: false, card_checks_required: true,
+            } });
           } else if (declarationCall && "clarification" in declarationCall.args) {
             const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning");
             if (outcome) return outcome;
@@ -14661,8 +14683,8 @@ async function runExpertLoop(
               const repairTool = repairBase
                 ? structuredMeasurementRepairTool(reasoningToolSchema)
                 : null;
-              const stateRepair = !repairBase && requireSelectionReadiness && declarationCall
-                ? compileStatePreservingDeclarationRepair(reasoningToolSchema, declarationCall.args)
+              const stateRepair = !repairBase && requireSelectionReadiness && acceptedDeclarationState
+                ? compileStatePreservingDeclarationRepair(reasoningToolSchema, acceptedDeclarationState)
                 : null;
               const stateRepairStrings = stateRepair ? compileToolStringConstraints(stateRepair.tool) : null;
               const stateRepairTransport = stateRepairStrings ? compileToolArrayBounds(stateRepairStrings.tool) : null;

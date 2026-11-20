@@ -15,7 +15,7 @@ const frameArgs=(schema:ReplayObject,quote:string,parameter:string,reasoning:str
   selection_readiness:{decision:'ready',critical_inputs:[{parameter,customer_quote:quote,question:'',impact:''}]},
 });
 
-for(const repairKind of ['exact-live-value','unknown-value','changed-customer-state'] as const)Deno.test({
+for(const repairKind of ['exact-live-value','initial-invalid-value','unknown-value','changed-customer-state'] as const)Deno.test({
   name:`recorded repair failure shape preserves accepted clarification: ${repairKind}`,
   permissions:{read:true,net:false,env:false},
   async fn(){
@@ -38,6 +38,9 @@ for(const repairKind of ['exact-live-value','unknown-value','changed-customer-st
               args.required_facet_values=[repairKind==='unknown-value'?'IP99':'IP65'];
               if(repairKind==='changed-customer-state')args.selection_readiness.critical_inputs[0].customer_quote='сухая спальня';
               else delete (args as ReplayObject).selection_readiness;
+            }else if(repairKind==='initial-invalid-value'){
+              args.reasoning='Проверю светильник для влажного помещения по защите IP65.';
+              args.required_facet_values=['IP99'];
             }
             return tool(args);
           }
@@ -47,7 +50,8 @@ for(const repairKind of ['exact-live-value','unknown-value','changed-customer-st
       const second=result.turns[1],steps=second.steps as ReplayObject[];
       assertEquals(repairCalls,1,'Exactly one repair, no unbounded loop');
       assert(steps.some(s=>s.step==='v3_selection_repair_state_frozen'),JSON.stringify(steps));
-      if(repairKind==='exact-live-value'){
+      if(repairKind==='exact-live-value'||repairKind==='initial-invalid-value'){
+        if(repairKind==='initial-invalid-value')assert(steps.some(s=>s.step==='v3_selection_input_state_retained'&&s.meta.product_declaration_usable===false),JSON.stringify(steps));
         assert(steps.some(s=>s.step==='v3_catalog_reference_wire_normalized'),JSON.stringify(steps));
         assert(result.outbound.some(r=>r.turn===1&&new URL(r.url).pathname==='/api/products'),JSON.stringify(steps));
         assert(second.cards.length>0,JSON.stringify(steps));
