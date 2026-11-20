@@ -34,6 +34,22 @@ Deno.test('only accepted owned application axes create obligations; numeric/devi
   assertThrows(()=>compileAcceptedApplicationProof(huge,'моечная',facets));
 });
 
+Deno.test('owned environmental facts cannot disappear behind arbitrary readiness parameter labels',()=>{
+  for(const parameter of ['Температурный режим','Контекст','Уточнение'])for(const quote of ['моечная','душевая','влажная зона']){
+    const proof=compileAcceptedApplicationProof(args(quote,parameter),`Уточнение клиента: ${quote}`,facets);
+    assertEquals(proof.length,1,`An arbitrary model-owned label cannot erase a source-owned environment: ${parameter}`);
+    assertEquals(acceptedApplicationCardIssue(card('Прибор для влажных помещений','IP44'),proof),null);
+    assertEquals(acceptedApplicationCardIssue(card('Прибор для влажных помещений','IP20'),proof),'environmental_protection_unknown');
+    assertEquals(acceptedApplicationCardIssue(card('Обычный прибор','IP65'),proof),'application_unknown');
+    assertEquals(compileAcceptedApplicationProof(args(quote,parameter),'Новая независимая задача',facets),[]);
+    assertEquals(compileAcceptedApplicationProof(args('6А',parameter),'6А',facets),[]);
+    assertEquals(compileAcceptedApplicationProof(args('IP65',parameter),'IP65',facets),[]);
+    const negated=compileAcceptedApplicationProof(args('не моечная',parameter),'не моечная',facets);
+    assertEquals(negated.length,1);assertEquals(negated[0].unresolved,true);
+    assertEquals(acceptedApplicationCardIssue(card('Прибор для моечной','IP65'),negated),'application_unknown');
+  }
+});
+
 Deno.test('a replaced application uses the owned positive phrase; no stale wet alias or invented IP axis for components',()=>{
   const proof=compileAcceptedApplicationProof(args('не моечная, а сухая кладовая'),'не моечная, а сухая кладовая',facets);
   assertEquals(proof[0].quote,'сухая кладовая');assertEquals(proof[0].protection,null);

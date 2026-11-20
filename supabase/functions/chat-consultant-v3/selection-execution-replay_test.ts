@@ -97,8 +97,9 @@ for(const room of ['моечная','кулинарная мастерская']
         model(body,turn){
           if(body.tool_choice?.function?.name==='declare_selection_reasoning'){
             const schema=body.tools[0].function.parameters;
-            const args=frameArgs(schema,turn?room:'','Помещение','');
-            if(!turn){args.measurement_scope='not_applicable';args.selection_readiness={decision:'needs_input',critical_inputs:[{parameter:'Помещение',customer_quote:'',question:'Для какого помещения нужен светильник?',impact:'От помещения зависят условия применения.'}]};}
+            const parameter=room==='моечная'?'Уточнение':'Помещение';
+            const args=frameArgs(schema,turn?room:'',parameter,'');
+            if(!turn){args.measurement_scope='not_applicable';args.selection_readiness={decision:'needs_input',critical_inputs:[{parameter,customer_quote:'',question:'Для какого помещения нужен светильник?',impact:'От помещения зависят условия применения.'}]};}
             else if(!schema.properties.selection_readiness){
               // A valid repair erases its OWN hypotheses, not the customer's
               // application. This reproduces the live unsafe empty-criteria
