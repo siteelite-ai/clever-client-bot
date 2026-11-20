@@ -33,7 +33,7 @@ export function compileAcceptedApplicationProof(
   if(state.critical_inputs.length>8)throw new Error('unvalidated_application_input_bound');
   const result:AcceptedApplicationObligation[]=[];
   for(const row of state.critical_inputs){
-    if(!object(row)||typeof row.parameter!=='string'||!applicationAxis.test(row.parameter)||
+    if(!object(row)||typeof row.parameter!=='string'||
       typeof row.customer_quote!=='string'||!row.customer_quote||!customerOwnsReadinessQuote(row.customer_quote,customerEvidence))continue;
     const raw=row.customer_quote.trim();
     // An explicit replacement is the positive use, not the rejected use.
@@ -41,7 +41,13 @@ export function compileAcceptedApplicationProof(
     const quote=(replacement?.[1]??raw).trim();
     const source=normalize(quote);
     const negative=/(?:^|[^\p{L}])(?:не|без)(?=$|[^\p{L}])/iu.test(source);
-    const wetRoom=!negative&&/(?:^|[^\p{L}])(?:моечн\p{L}*|душев\p{L}*|ванн(?:ая|ой|ую|ое|ые|ых|ом)|влажн\p{L}*|помещени\p{L}*\s+с\s+повышенн\p{L}*\s+влажност\p{L}*)(?=$|[^\p{L}])/iu.test(source);
+    const wetMention=/(?:^|[^\p{L}])(?:моечн\p{L}*|душев\p{L}*|ванн(?:ая|ой|ую|ое|ые|ых|ом)|влажн\p{L}*|помещени\p{L}*\s+с\s+повышенн\p{L}*\s+влажност\p{L}*)(?=$|[^\p{L}])/iu.test(source);
+    const wetRoom=!negative&&wetMention;
+    // The customer owns the environmental fact, not the model's arbitrary
+    // parameter caption. Reuse the same positive source-language normalizer
+    // independently of that caption; technical/code-like answers still stay
+    // with their own guards. No catalog/model prose creates an environment.
+    if(!applicationAxis.test(row.parameter)&&!wetMention)continue;
     const values=[quote,...(wetRoom?['влажное помещение']:[])];
     const protection=wetRoom?deriveEnvironmentalProtectionRange('влажная среда',facets):null;
     result.push({parameter:row.parameter,quote,unresolved:negative,
