@@ -78,3 +78,22 @@ export function normalizeRequiredFacetWireReferences(
   });
   return { args: normalized ? { ...args, required_facet_values: values } : args, normalized };
 }
+
+/** Debug the protocol, not model/customer prose. Only bounded server-shaped
+ * reference IDs may be logged; arbitrary literals are represented by type
+ * and capped length. This never grants or normalizes a reference. */
+export function requiredFacetWireDiagnostics(args:RecordValue,canonicalTool:Tool){
+  const properties=canonicalTool.function.parameters.properties;
+  const field=object(properties)?properties.required_facet_values:undefined;
+  const items=object(field)?field.items:undefined;
+  const allowed=new Set(object(items)&&Array.isArray(items.enum)?items.enum:[]);
+  const values=args.required_facet_values;
+  return {allowed_count:allowed.size,received_count:Array.isArray(values)?values.length:null,
+    samples:Array.isArray(values)?values.slice(0,8).map(value=>({
+      shape:typeof value==='string'?(/^f\d{1,2}v\d{1,2}$/u.test(value)?'opaque_id':'literal'):'non_string',
+      reference:typeof value==='string'&&/^f\d{1,2}v\d{1,2}$/u.test(value)?value:null,
+      chars:typeof value==='string'?Math.min(value.length,3000):null,
+      allowed:allowed.has(value),
+    })):[],
+  };
+}

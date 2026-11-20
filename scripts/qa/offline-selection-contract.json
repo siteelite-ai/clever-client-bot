@@ -15,13 +15,16 @@
     {"id":"environmental_proof", "required":"unknown protection does not become a proven fit", "test":"supabase/functions/chat-consultant-v3/environmental-protection-integration_test.ts"},
     {"id":"transport_failure", "required":"provider or catalog failure is not represented as absent products", "test":"supabase/functions/chat-consultant-v3/catalog-outage-direct-route-integration_test.ts"},
     {"id":"repair_state_ownership", "required":"reasoning correction cannot rewrite or drop accepted customer inputs and subject; invalid repairs do not masquerade as missing user input", "test":"supabase/functions/_shared/v3-tools/selection-declaration-repair_test.ts"},
-    {"id":"repair_execution_and_outage", "required":"only exact unique live references normalize; repairs and provider errors retain strict geometry/protection proof and a bounded model-call budget", "test":"supabase/functions/chat-consultant-v3/selection-execution-replay_test.ts"}
+    {"id":"repair_execution_and_outage", "required":"only exact unique live references normalize; repairs and provider errors retain strict geometry/protection proof and a bounded model-call budget", "test":"supabase/functions/chat-consultant-v3/selection-execution-replay_test.ts"},
+    {"id":"accepted_application_proof", "required":"confirmed application/environment obligations survive empty repaired criteria and require same-card proof independently of READY or retrieval success", "test":"supabase/functions/_shared/v3-tools/accepted-application-proof_test.ts"}
   ],
   "recorded_failure_sources": [
     {"kind":"compact_measurement_projection", "log":"f76e028d-f48a-4f1d-95b9-ebcf3c08ebcf", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
     {"kind":"ready_application_without_executable_search", "log":"ccf4aa3f-f748-4fb9-943c-c291ba622cf0", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
     {"kind":"repair_enum_failure_after_accepted_input", "log":"845d049a-d48f-4df2-af62-6c21caa647eb", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
-    {"kind":"correction_completion_envelope_failure_after_geometry_input", "log":"c1841663-bd47-4bd2-af9b-f67c969f3a9d", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"}
+    {"kind":"correction_completion_envelope_failure_after_geometry_input", "log":"c1841663-bd47-4bd2-af9b-f67c969f3a9d", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
+    {"kind":"application_erased_despite_successful_repair_and_retrieval", "log":"13c8fc3b-7c01-4cfd-9dd9-4b099e6eb548", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
+    {"kind":"required_reference_enum_failure_in_narrow_repair", "log":"fb245845-e65e-4036-90af-edb669b726a6", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"}
   ],
   "release_policy": "offline pass is necessary, not sufficient; no automatic merge, deployment or paid requests"
 }

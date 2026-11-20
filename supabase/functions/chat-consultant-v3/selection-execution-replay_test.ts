@@ -34,6 +34,10 @@ for(const repairKind of ['exact-live-value','initial-invalid-value','unknown-val
               args.measurement_scope='not_applicable';args.selection_readiness={decision:'needs_input',critical_inputs:[{parameter:'Помещение',customer_quote:'',question:'Для какого помещения нужен светильник?',impact:'Важна среда эксплуатации.'}]};
             }else if(!schema.properties.selection_readiness){
               repairCalls++;
+              const system=body.messages.find((m:ReplayObject)=>m.role==='system')?.content??'';
+              assert(!system.includes('заполни обязательный объект first'),'Repair must not inherit the primary readiness wire instructions');
+              assert(!system.includes('Перед обоснованием ОБЯЗАТЕЛЬНО заполни selection_readiness'));
+              assert(schema.properties.required_facet_values.items.enum?.length>8,'Narrow correction retains its bounded opaque-ID vocabulary');
               args.reasoning='Для влажного помещения нужен светильник, степень защиты IP65. Проверю защиту каждого изделия.';
               args.required_facet_values=[repairKind==='unknown-value'?'IP99':'IP65'];
               if(repairKind==='changed-customer-state')args.selection_readiness.critical_inputs[0].customer_quote='сухая спальня';
@@ -65,6 +69,54 @@ for(const repairKind of ['exact-live-value','initial-invalid-value','unknown-val
         assert(steps.some(s=>s.step===(repairKind==='unknown-value'?'v3_selection_repair_contract_rejected':'v3_selection_repair_state_rejected')),JSON.stringify(steps));
         assert(!steps.some(s=>s.step==='v3_selection_readiness_decision'&&s.meta.source==='derived_reasoning_repair'&&s.meta.rejection==='missing_readiness_decision'));
       }
+    }finally{Deno.env.get=env;}
+  },
+});
+
+for(const room of ['моечная','кулинарная мастерская'])Deno.test({
+  name:`source-owned application survives empty repaired criteria and checks each card: ${room}`,
+  permissions:{read:true,net:false,env:false},
+  async fn(){
+    const env=Deno.env.get;Deno.env.get=offlineGet;
+    try{
+      const category='Светильники';
+      const purpose=room==='моечная'?'влажных помещений':'кулинарной мастерской';
+      const result=await replayOfflineDialogue(offlineHandler(),{
+        category,facets:[facet('ip','IP',['IP20','IP44','IP65'])],
+        products:[
+          product(801,'Светильник обычный IP20',category,[['ip','IP','IP20']]),
+          product(802,'Светильник обычный IP65',category,[['ip','IP','IP65']]),
+          product(803,`Светильник для ${purpose} IP65`,category,[['ip','IP','IP65']]),
+          ...(room==='моечная'?[
+            product(804,`Светильник для ${purpose} IP20`,category,[['ip','IP','IP20']]),
+            product(805,`Светильник для ${purpose}`,category,[]),
+            product(806,'Светильник не для моечной IP65',category,[['ip','IP','IP65']]),
+          ]:[]),
+        ],
+        messages:['Подбери светильник для помещения',room],
+        model(body,turn){
+          if(body.tool_choice?.function?.name==='declare_selection_reasoning'){
+            const schema=body.tools[0].function.parameters;
+            const args=frameArgs(schema,turn?room:'','Помещение','');
+            if(!turn){args.measurement_scope='not_applicable';args.selection_readiness={decision:'needs_input',critical_inputs:[{parameter:'Помещение',customer_quote:'',question:'Для какого помещения нужен светильник?',impact:'От помещения зависят условия применения.'}]};}
+            else if(!schema.properties.selection_readiness){
+              // A valid repair erases its OWN hypotheses, not the customer's
+              // application. This reproduces the live unsafe empty-criteria
+              // path without pretending to possess the raw provider reply.
+              args.reasoning='Подбираю светильник. Проверю варианты по характеристикам.';
+              args.measurement_scope='not_applicable';delete (args as ReplayObject).selection_readiness;
+            }
+            return tool(args);
+          }
+          return replayJson({choices:[{finish_reason:'stop',message:{content:JSON.stringify({candidates:[{pagetitle:category,confidence:1}],mode:'continuation',confidence:1,reason:'issued answer'}),tool_calls:[]}}]});
+        },
+      });
+      const turn=result.turns[1],steps=turn.steps as ReplayObject[];
+      assert(steps.some(s=>s.step==='v3_customer_application_obligations_bound'),JSON.stringify(steps));
+      assert(result.outbound.some(r=>r.turn===1&&new URL(r.url).pathname==='/api/products'));
+      assert(JSON.stringify(turn.cards).includes('fixture-803/'),JSON.stringify(steps));
+      for(const id of [801,802,804,805,806])assert(!JSON.stringify(turn.cards).includes(`fixture-${id}/`),'READY/repaired criteria cannot bypass same-card application/environment proof');
+      assert(steps.some(s=>s.step==='v3_customer_application_card_proof'&&s.meta.verified===1),JSON.stringify(steps));
     }finally{Deno.env.get=env;}
   },
 });
