@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.5"
+    PostgrestVersion: "14.18"
   }
   public: {
     Tables: {
@@ -208,7 +208,9 @@ export type Database = {
           final_products_count: number
           final_response: string | null
           id: string
+          message_id: string | null
           pipeline: string | null
+          response_events: Json
           session_id: string | null
           steps: Json
           total_ms: number | null
@@ -225,7 +227,9 @@ export type Database = {
           final_products_count?: number
           final_response?: string | null
           id?: string
+          message_id?: string | null
           pipeline?: string | null
+          response_events?: Json
           session_id?: string | null
           steps?: Json
           total_ms?: number | null
@@ -242,12 +246,80 @@ export type Database = {
           final_products_count?: number
           final_response?: string | null
           id?: string
+          message_id?: string | null
           pipeline?: string | null
+          response_events?: Json
           session_id?: string | null
           steps?: Json
           total_ms?: number | null
           user_agent?: string | null
           user_query?: string | null
+        }
+        Relationships: []
+      }
+      chat_v3_admission_buckets: {
+        Row: {
+          admitted_count: number
+          mode: string
+          window_started_at: string
+        }
+        Insert: {
+          admitted_count?: number
+          mode: string
+          window_started_at?: string
+        }
+        Update: {
+          admitted_count?: number
+          mode?: string
+          window_started_at?: string
+        }
+        Relationships: []
+      }
+      chat_v3_admission_decisions: {
+        Row: {
+          allowed: boolean
+          created_at: string
+          expires_at: string
+          in_flight_before: number
+          limit_reason: string | null
+          log_id: string
+          mode: string
+          reason: string
+          released_at: string | null
+          reservation_expires_at: string | null
+          retry_after_seconds: number | null
+          window_count_before: number
+          would_reject: boolean
+        }
+        Insert: {
+          allowed: boolean
+          created_at?: string
+          expires_at: string
+          in_flight_before: number
+          limit_reason?: string | null
+          log_id: string
+          mode: string
+          reason: string
+          released_at?: string | null
+          reservation_expires_at?: string | null
+          retry_after_seconds?: number | null
+          window_count_before: number
+          would_reject: boolean
+        }
+        Update: {
+          allowed?: boolean
+          created_at?: string
+          expires_at?: string
+          in_flight_before?: number
+          limit_reason?: string | null
+          log_id?: string
+          mode?: string
+          reason?: string
+          released_at?: string | null
+          reservation_expires_at?: string | null
+          retry_after_seconds?: number | null
+          window_count_before?: number
+          would_reject?: boolean
         }
         Relationships: []
       }
@@ -519,6 +591,96 @@ export type Database = {
         }
         Relationships: []
       }
+      public_api_admission_buckets: {
+        Row: {
+          admitted_count: number
+          lane: string
+          mode: string
+          window_started_at: string
+        }
+        Insert: {
+          admitted_count?: number
+          lane: string
+          mode: string
+          window_started_at?: string
+        }
+        Update: {
+          admitted_count?: number
+          lane?: string
+          mode?: string
+          window_started_at?: string
+        }
+        Relationships: []
+      }
+      public_api_admission_cancellations: {
+        Row: {
+          created_at: string
+          expires_at: string
+          reservation_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          reservation_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          reservation_id?: string
+        }
+        Relationships: []
+      }
+      public_api_admission_reservations: {
+        Row: {
+          allowed: boolean
+          created_at: string
+          expires_at: string
+          lane_decisions: Json
+          lanes: string[]
+          limit_reason: string | null
+          mode: string
+          reason: string
+          released_at: string | null
+          reservation_expires_at: string | null
+          reservation_id: string
+          retry_after_seconds: number | null
+          route: string
+          would_reject: boolean
+        }
+        Insert: {
+          allowed: boolean
+          created_at?: string
+          expires_at: string
+          lane_decisions?: Json
+          lanes: string[]
+          limit_reason?: string | null
+          mode: string
+          reason: string
+          released_at?: string | null
+          reservation_expires_at?: string | null
+          reservation_id: string
+          retry_after_seconds?: number | null
+          route: string
+          would_reject: boolean
+        }
+        Update: {
+          allowed?: boolean
+          created_at?: string
+          expires_at?: string
+          lane_decisions?: Json
+          lanes?: string[]
+          limit_reason?: string | null
+          mode?: string
+          reason?: string
+          released_at?: string | null
+          reservation_expires_at?: string | null
+          reservation_id?: string
+          retry_after_seconds?: number | null
+          route?: string
+          would_reject?: boolean
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           id: string
@@ -542,6 +704,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      check_chat_v3_admission: {
+        Args: {
+          p_limit_in_flight?: number
+          p_limit_per_minute?: number
+          p_log_id: string
+          p_mode?: string
+        }
+        Returns: Json
+      }
       gc_chat_cache_v2: { Args: never; Returns: undefined }
       has_role: {
         Args: {
@@ -549,6 +720,27 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      release_chat_v3_admission: {
+        Args: { p_log_id: string }
+        Returns: boolean
+      }
+      release_public_api_admission: {
+        Args: { p_reservation_id: string }
+        Returns: boolean
+      }
+      reserve_public_api_admission: {
+        Args: {
+          p_catalog_limit_in_flight?: number
+          p_catalog_limit_per_minute?: number
+          p_lanes: string[]
+          p_mode: string
+          p_model_limit_in_flight?: number
+          p_model_limit_per_minute?: number
+          p_reservation_id: string
+          p_route: string
+        }
+        Returns: Json
       }
       search_knowledge: {
         Args: {
